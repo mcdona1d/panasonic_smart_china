@@ -23,7 +23,7 @@ FAN_MUTE = "Quiet" # 静音
 # === 控制器配置数据库 ===
 SUPPORTED_CONTROLLERS = {
     "CZ-RD501DW2": {
-        "name": "松下线控器 CZ-RD501DW2",
+        "name": "松下风管机线控器 CZ-RD501DW2",
         "temp_scale": 2,
         "hvac_mapping": {
             HVACMode.COOL: 3,
