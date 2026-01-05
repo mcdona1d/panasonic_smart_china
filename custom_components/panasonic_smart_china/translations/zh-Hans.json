@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "登录松下账号",
+        "description": "请输入您的松下智能家电 App (中国版) 账号密码。\n首次登录会自动保存会话，添加后续设备时无需再次输入。",
+        "data": {
+          "username": "手机号",
+          "password": "密码"
+        }
+      },
+      "device": {
+        "title": "配置设备",
+        "description": "成功获取设备列表！请选择要添加的空调及相关配置。",
+        "data": {
+          "deviceId": "选择空调设备",
+          "controller_model": "线控器/遥控器型号",
+          "sensor_entity_id": "关联室温传感器 (可选)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "登录失败：请检查账号密码或网络连接",
+      "no_devices_found": "未找到设备：请确保账号下已绑定空调",
+      "token_generation_failed": "Token 生成失败：设备 ID 格式不正确",
+      "all_devices_configured": "所有设备均已添加，无需重复配置"
+    },
+    "abort": {
+      "already_configured": "该设备已配置",
+      "reauth_successful": "重新认证成功"
+    }
+  },
+  "entity": {
+    "climate": {
+      "panasonic_ac": {
+        "name": "松下空调"
+      }
+    }
+  }
+}
