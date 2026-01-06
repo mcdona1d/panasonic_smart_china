@@ -29,7 +29,7 @@ URL_SET = "https://app.psmartcloud.com/App/ACDevSetStatusInfoAW"
 URL_GET = "https://app.psmartcloud.com/App/ACDevGetStatusInfoAW"
 
 # === 轮询频率 ===
-POLLING_INTERVAL = timedelta(seconds=5)
+POLLING_INTERVAL = timedelta(seconds=15)
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Setup climate entity."""
