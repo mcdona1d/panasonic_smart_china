@@ -233,11 +233,42 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return real_usr_id, ssid, devices
 
     def _generate_token(self, device_id):
+        """
+        Generate SHA512 token from device_id.
+        
+        Supports multiple device types with different category codes:
+        - Air conditioner (空调): _0900_
+        - Washing machine (洗衣机): _0600_
+        - Other devices: dynamically detected from deviceId format
+        
+        deviceId format: MAC_CATEGORY_SUFFIX (e.g., A1B2C3D4E5F6_0900_1234)
+        """
         try:
             did = device_id.upper()
-            parts = did.split('_0900_')
-            if len(parts) != 2: return None
-            stoken = parts[0][6:] + '_0900_' + parts[0][:6]
+            
+            # Parse deviceId to extract MAC, category, and suffix
+            # Format: MAC_CATEGORY_SUFFIX (e.g., A1B2C3D4E5F6_0900_1234)
+            parts = did.split('_')
+            if len(parts) != 3:
+                _LOGGER.error("Invalid deviceId format: %s (expected MAC_CATEGORY_SUFFIX)", device_id)
+                return None
+            
+            mac_part = parts[0]      # e.g., "A1B2C3D4E5F6" (12-char MAC)
+            category = parts[1]       # e.g., "0900" or "0600"
+            suffix = parts[2]         # e.g., "1234"
+            
+            # Validate MAC part length (should be 12 characters for standard MAC)
+            if len(mac_part) < 6:
+                _LOGGER.error("Invalid MAC part in deviceId: %s", device_id)
+                return None
+            
+            # Generate stoken: last 6 chars + '_CATEGORY_' + first 6 chars
+            # Example: "D4E5F6_0900_A1B2C3" from "A1B2C3D4E5F6_0900_1234"
+            stoken = mac_part[6:] + '_' + category + '_' + mac_part[:6]
+            
+            # Calculate token: sha512(sha512(stoken) + '_' + suffix)
             inner = hashlib.sha512(stoken.encode()).hexdigest()
-            return hashlib.sha512((inner + '_' + parts[1]).encode()).hexdigest()
-        except: return None
+            return hashlib.sha512((inner + '_' + suffix).encode()).hexdigest()
+        except Exception as e:
+            _LOGGER.error("Token generation failed for deviceId %s: %s", device_id, e)
+            return None
