@@ -11,18 +11,19 @@
       },
       "device": {
         "title": "配置设备",
-        "description": "成功获取设备列表！请选择要添加的空调及相关配置。",
+        "description": "成功获取设备列表！请选择要添加的设备及对应的控制器型号。\n标有 ⛔ 的设备暂不支持，无法添加。",
         "data": {
-          "deviceId": "选择空调设备",
-          "controller_model": "线控器/遥控器型号",
+          "deviceId": "选择设备",
+          "controller_model": "控制器/线控器型号",
           "sensor_entity_id": "关联室温传感器 (可选)"
         }
       }
     },
     "error": {
       "cannot_connect": "登录失败：请检查账号密码或网络连接",
-      "no_devices_found": "未找到设备：请确保账号下已绑定空调",
+      "no_devices_found": "未找到设备：请确保账号下已绑定设备",
       "token_generation_failed": "Token 生成失败：设备 ID 格式不正确",
+      "device_not_supported": "该设备暂不支持，请选择其他设备",
       "all_devices_configured": "所有设备均已添加，无需重复配置"
     },
     "abort": {
