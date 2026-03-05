@@ -43,7 +43,7 @@ class PanasonicACEntity(ClimateEntity):
         self._device_id = config[CONF_DEVICE_ID]
         self._token = config[CONF_TOKEN]
         self._ssid = config[CONF_SSID]
-        self._sensor_id = config[CONF_SENSOR_ID]
+        self._sensor_id = config.get(CONF_SENSOR_ID)
         self._attr_name = name
         self._attr_unique_id = f"panasonic_{self._device_id}"
 
@@ -147,6 +147,8 @@ class PanasonicACEntity(ClimateEntity):
 
     @property
     def current_temperature(self):
+        if not self._sensor_id:
+            return None
         state = self._hass.states.get(self._sensor_id)
         if state and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             try: return float(state.state)

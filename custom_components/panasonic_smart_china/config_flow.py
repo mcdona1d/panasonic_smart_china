@@ -132,7 +132,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_SSID: self._login_data[CONF_SSID],
                         CONF_DEVICE_ID: selected_dev_id,
                         CONF_TOKEN: token,
-                        CONF_SENSOR_ID: user_input[CONF_SENSOR_ID],
+                        CONF_SENSOR_ID: user_input.get(CONF_SENSOR_ID),
                         CONF_CONTROLLER_MODEL: user_input[CONF_CONTROLLER_MODEL], 
                     }
                 )
@@ -145,7 +145,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({
                 vol.Required(CONF_DEVICE_ID): vol.In(available_devices),
                 vol.Required(CONF_CONTROLLER_MODEL, default="CZ-RD501DW2"): vol.In(controller_options),
-                vol.Required(CONF_SENSOR_ID): EntitySelector(
+                vol.Optional(CONF_SENSOR_ID): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
                 ),
             }),
