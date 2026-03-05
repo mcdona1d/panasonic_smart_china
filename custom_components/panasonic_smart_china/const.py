@@ -9,11 +9,15 @@ from homeassistant.components.climate.const import (
 DOMAIN = "panasonic_smart_china"
 
 CONF_USR_ID = "usrId"
+CONF_USERNAME = "username"
 CONF_DEVICE_ID = "deviceId"
 CONF_TOKEN = "token"
 CONF_SSID = "SSID"
 CONF_SENSOR_ID = "sensor_entity_id"
 CONF_CONTROLLER_MODEL = "controller_model"
+CONF_FAMILY_ID = "familyId"
+CONF_REAL_FAMILY_ID = "realFamilyId"
+CONF_DEVICES = "devices"
 
 # 自定义风速常量
 FAN_MIN = "Min"    # 最低

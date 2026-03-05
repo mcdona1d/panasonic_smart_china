@@ -16,10 +16,12 @@ from homeassistant.const import (
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
-    CONF_USR_ID, CONF_DEVICE_ID, CONF_TOKEN, CONF_SSID, 
-    CONF_SENSOR_ID, CONF_CONTROLLER_MODEL, 
+    DOMAIN, CONF_USR_ID, CONF_DEVICE_ID, CONF_TOKEN, CONF_SSID, 
+    CONF_SENSOR_ID, CONF_CONTROLLER_MODEL, CONF_DEVICES,
     SUPPORTED_CONTROLLERS, FAN_MUTE, FAN_MIN, FAN_MAX
 )
 
@@ -34,22 +36,35 @@ POLLING_INTERVAL = timedelta(seconds=15)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """根据控制器的 device_type 创建对应的实体子类"""
+    """根据配置中的设备列表创建实体"""
     config = entry.data
-    model = config.get(CONF_CONTROLLER_MODEL, "CZ-RD501DW2")
-    profile = SUPPORTED_CONTROLLERS.get(model)
-    if not profile:
-        _LOGGER.error("Controller model %s not found, using default.", model)
-        profile = list(SUPPORTED_CONTROLLERS.values())[0]
+    devices_data = config.get(CONF_DEVICES, {})
+    
+    entities = []
+    for did, dev_config in devices_data.items():
+        model = dev_config.get(CONF_CONTROLLER_MODEL, "CZ-RD501DW2")
+        profile = SUPPORTED_CONTROLLERS.get(model)
+        if not profile:
+            _LOGGER.error("Controller model %s not found for device %s, using default.", model, did)
+            profile = list(SUPPORTED_CONTROLLERS.values())[0]
 
-    dev_type = profile.get("device_type", "AC")
+        dev_type = profile.get("device_type", "AC")
 
-    if dev_type == "Heater":
-        entity = PanasonicHeaterEntity(hass, config, entry.title, profile)
-    else:
-        entity = PanasonicACEntity(hass, config, entry.title, profile)
+        # 合并全局配置到具体设备配置
+        entity_config = {
+            **config,
+            **dev_config,
+            CONF_DEVICE_ID: did
+        }
 
-    async_add_entities([entity])
+        if dev_type == "Heater":
+            entity = PanasonicHeaterEntity(hass, entry, entity_config, dev_config.get("deviceName"), profile)
+        else:
+            entity = PanasonicACEntity(hass, entry, entity_config, dev_config.get("deviceName"), profile)
+        
+        entities.append(entity)
+
+    async_add_entities(entities)
 
 
 # ============================================================
@@ -58,8 +73,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class PanasonicBaseEntity(ClimateEntity):
     """松下设备基类 — 包含轮询、状态获取、命令发送等通用逻辑"""
 
-    def __init__(self, hass, config, name, profile):
+    def __init__(self, hass, entry, config, name, profile):
         self._hass = hass
+        self._entry = entry
         self._usr_id = config[CONF_USR_ID]
         self._device_id = config[CONF_DEVICE_ID]
         self._token = config[CONF_TOKEN]
@@ -80,6 +96,16 @@ class PanasonicBaseEntity(ClimateEntity):
 
         # 定时器句柄
         self._unsub_polling = None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device identification."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_id)},
+            name=self._attr_name,
+            manufacturer="Panasonic",
+            via_device=(DOMAIN, self._usr_id),
+        )
 
     # --- 轮询管理 ---
 
@@ -157,8 +183,8 @@ class PanasonicBaseEntity(ClimateEntity):
                 json_data = await response.json()
 
                 if json_data.get('errorCode') in ['3003', '3004']:
-                    _LOGGER.error("SSID expired.")
-                    return None
+                    _LOGGER.error("Session expired (errorCode: %s), triggering reauth.", json_data.get('errorCode'))
+                    raise ConfigEntryAuthFailed("Panasonic Session Expired")
 
                 if 'results' in json_data and 'runStatus' in json_data['results']:
                     res = json_data['results']
@@ -168,8 +194,10 @@ class PanasonicBaseEntity(ClimateEntity):
                         self._update_local_state(res)
 
                     return res
+        except ConfigEntryAuthFailed:
+            raise
         except Exception as e:
-            _LOGGER.debug("Fetch status failed: %s", e)
+            _LOGGER.debug("Fetch status failed for %s: %s", self._device_id, e)
             return None
         return None
 
@@ -184,7 +212,7 @@ class PanasonicBaseEntity(ClimateEntity):
         if latest_params:
             current_params = latest_params.copy()
         else:
-            _LOGGER.warning("Could not fetch latest status, using cached params.")
+            _LOGGER.warning("Could not fetch latest status for %s, using cached params.", self._device_id)
             current_params = self._last_params.copy()
 
         # 2. Build payload (委托给子类)
@@ -209,7 +237,7 @@ class PanasonicBaseEntity(ClimateEntity):
                 self.async_write_ha_state()
 
         except Exception as e:
-            _LOGGER.error("Set failed: %s", e)
+            _LOGGER.error("Set command failed: %s", e)
 
     def _get_headers(self):
         """基础 HTTP Headers，子类可覆盖扩展"""
@@ -265,8 +293,8 @@ class PanasonicBaseEntity(ClimateEntity):
 class PanasonicACEntity(PanasonicBaseEntity):
     """松下空调实体 — 支持温度设置、风速控制"""
 
-    def __init__(self, hass, config, name, profile):
-        super().__init__(hass, config, name, profile)
+    def __init__(self, hass, entry, config, name, profile):
+        super().__init__(hass, entry, config, name, profile)
         self._sensor_id = config.get(CONF_SENSOR_ID)
         self._fan_map = profile.get("fan_mapping", {})
         self._fan_overrides = profile.get("fan_payload_overrides", {})

@@ -1,15 +1,21 @@
 import logging
 import hashlib
+from typing import Any, Mapping
 import voluptuous as vol
 import aiohttp
 
 from homeassistant import config_entries
-from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
-from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
+from homeassistant.core import callback
+from homeassistant.const import CONF_PASSWORD
+from homeassistant.helpers.selector import (
+    EntitySelector, EntitySelectorConfig,
+    SelectSelector, SelectSelectorConfig, SelectSelectorMode
+)
 
 from .const import (
     DOMAIN, CONF_USR_ID, CONF_DEVICE_ID, CONF_TOKEN, 
     CONF_SSID, CONF_SENSOR_ID, CONF_CONTROLLER_MODEL,
+    CONF_USERNAME, CONF_FAMILY_ID, CONF_REAL_FAMILY_ID, CONF_DEVICES,
     SUPPORTED_CONTROLLERS,
     find_controllers_for_category, extract_category_from_device_id
 )
@@ -21,67 +27,41 @@ URL_GET_DEV = "https://app.psmartcloud.com/App/UsrGetBindDevInfo"
 URL_GET_TOKEN = "https://app.psmartcloud.com/App/UsrGetToken"
 
 class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self):
-        self._login_data = {}
+        self._username = None
+        self._usr_id = None
+        self._ssid = None
+        self._family_id = None
+        self._real_family_id = None
         self._devices = {}
-        self._temp_login_info = {}
-        # 缓存每个设备的支持信息: {device_id: {supported, category, matching_controllers}}
-        self._device_support_map = {}
+        self._selected_device_ids = []
+        self._current_device_index = 0
+        self._configured_devices = {}
 
     async def async_step_user(self, user_input=None):
-        """步骤1: 检查缓存 Session 或 登录"""
+        """步骤1: 账号登录"""
         errors = {}
-
-        # 1. 检查全局缓存中是否有现成的 Session
-        domain_data = self.hass.data.get(DOMAIN, {})
-        cached_session = domain_data.get("session")
-
-        if cached_session:
-            _LOGGER.info("Found cached session, verifying validity...")
-            
-            valid_devices = await self._get_devices_with_ssid(
-                cached_session[CONF_USR_ID], cached_session[CONF_SSID]
-            )
-            
-            if valid_devices:
-                _LOGGER.info("Session valid. Skipping login.")
-                self._login_data = {
-                    CONF_USR_ID: cached_session[CONF_USR_ID],
-                    CONF_SSID: cached_session[CONF_SSID]
-                }
-                self._devices = valid_devices
-                self._analyze_device_support()
-                return await self.async_step_device()
-            else:
-                _LOGGER.warning("Cached session expired.")
-                if DOMAIN in self.hass.data:
-                    self.hass.data[DOMAIN]["session"] = None
-
-        # 2. 处理用户登录输入
         if user_input is not None:
             try:
-                usr_id, ssid, devices = await self._authenticate_full_flow(
+                self._username = user_input[CONF_USERNAME]
+                usr_id, ssid, family_info, devices = await self._authenticate_full_flow(
                     user_input[CONF_USERNAME], user_input[CONF_PASSWORD]
                 )
                 
                 if not devices:
                     return self.async_abort(reason="no_devices_found")
 
-                self._login_data = {CONF_USR_ID: usr_id, CONF_SSID: ssid}
+                self._usr_id = usr_id
+                self._ssid = ssid
+                self._family_id = family_info['familyId']
+                self._real_family_id = family_info['realFamilyId']
                 self._devices = devices
-                
-                self.hass.data.setdefault(DOMAIN, {})
-                self.hass.data[DOMAIN]["session"] = {
-                    CONF_USR_ID: usr_id,
-                    CONF_SSID: ssid,
-                    "devices": devices,
-                    "familyId": self._temp_login_info.get('familyId'),
-                    "realFamilyId": self._temp_login_info.get('realFamilyId')
-                }
 
-                self._analyze_device_support()
+                await self.async_set_unique_id(self._usr_id)
+                self._abort_if_unique_id_configured()
+
                 return await self.async_step_device()
 
             except Exception as e:
@@ -97,120 +77,127 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    def _analyze_device_support(self):
-        """分析每个设备的支持情况，构建支持映射表"""
-        self._device_support_map = {}
-        for did in self._devices:
-            category = extract_category_from_device_id(did)
-            matching = find_controllers_for_category(category) if category else {}
-            self._device_support_map[did] = {
-                "supported": len(matching) > 0,
-                "category": category,
-                "matching_controllers": matching
-            }
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]):
+        """SSID 过期触发"""
+        self._username = entry_data.get(CONF_USERNAME)
+        self._usr_id = entry_data.get(CONF_USR_ID)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """重新登录确认框"""
+        errors = {}
+        if user_input is not None:
+            try:
+                usr_id, ssid, family_info, devices = await self._authenticate_full_flow(
+                    self._username, user_input[CONF_PASSWORD]
+                )
+                
+                reauth_entry = self._get_reauth_entry()
+                new_data = dict(reauth_entry.data)
+                new_data[CONF_SSID] = ssid
+                new_data[CONF_FAMILY_ID] = family_info['familyId']
+                new_data[CONF_REAL_FAMILY_ID] = family_info['realFamilyId']
+                
+                return self.async_update_reload_and_abort(reauth_entry, data=new_data)
+            except Exception as e:
+                _LOGGER.error("Reauth failed: %s", e)
+                errors["base"] = "invalid_auth"
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({
+                vol.Required(CONF_PASSWORD): str,
+            }),
+            errors=errors,
+        )
 
     async def async_step_device(self, user_input=None):
-        """步骤2: 选择设备"""
+        """步骤2: 选择要添加的设备 (多选)"""
         errors = {}
-        
-        # 获取已添加的设备，防止重复
-        existing_ids = self._async_current_ids()
-        
-        # 构建可选设备列表（标注支持状态）
-        available_devices = {}
-        for did, info in self._devices.items():
-            if f"panasonic_{did}" not in existing_ids:
-                dev_name = info.get('deviceName', 'Unknown')
-                support_info = self._device_support_map.get(did, {})
-                if support_info.get("supported"):
-                    available_devices[did] = f"{dev_name} ({did})"
-                else:
-                    available_devices[did] = f"⛔ {dev_name} ({did}) [暂不支持]"
-
-        if not available_devices:
-            return self.async_abort(reason="all_devices_configured")
-
         if user_input is not None:
-            selected_dev_id = user_input[CONF_DEVICE_ID]
-            support_info = self._device_support_map.get(selected_dev_id, {})
-            
-            # 检查设备是否受支持
-            if not support_info.get("supported"):
+            self._selected_device_ids = user_input["devices"]
+            if not self._selected_device_ids:
                 errors["base"] = "device_not_supported"
             else:
-                dev_info = self._devices.get(selected_dev_id)
-                dev_name = dev_info.get("deviceName", "Panasonic Device")
-                
-                token = self._generate_token(selected_dev_id)
-                if not token:
-                    errors["base"] = "token_generation_failed"
-                else:
-                    return self.async_create_entry(
-                        title=dev_name,
-                        data={
-                            CONF_USR_ID: self._login_data[CONF_USR_ID],
-                            CONF_SSID: self._login_data[CONF_SSID],
-                            CONF_DEVICE_ID: selected_dev_id,
-                            CONF_TOKEN: token,
-                            CONF_SENSOR_ID: user_input.get(CONF_SENSOR_ID),
-                            CONF_CONTROLLER_MODEL: user_input[CONF_CONTROLLER_MODEL], 
-                        }
-                    )
+                return await self.async_step_device_config()
 
-        # 构建控制器列表
-        controller_options = {k: v["name"] for k, v in SUPPORTED_CONTROLLERS.items()}
-
-        # 找出第一个可用设备的默认控制器型号
-        default_controller = "CZ-RD501DW2"
-        for did, support_info in self._device_support_map.items():
-            if f"panasonic_{did}" not in existing_ids and support_info.get("supported"):
-                matching = support_info.get("matching_controllers", {})
-                if matching:
-                    default_controller = list(matching.keys())[0]
-                    break
+        # 构建设备列表选项
+        device_options = []
+        for did, info in self._devices.items():
+            category = extract_category_from_device_id(did)
+            supported = len(find_controllers_for_category(category)) > 0
+            label = f"{info.get('deviceName', 'Unknown')} ({did})"
+            if supported:
+                label = f"✅ 支持: {label}"
+            else:
+                label = f"❌ 暂不支持: {label}"
+            
+            device_options.append({"value": did, "label": label})
 
         return self.async_show_form(
             step_id="device",
             data_schema=vol.Schema({
-                vol.Required(CONF_DEVICE_ID): vol.In(available_devices),
-                vol.Required(CONF_CONTROLLER_MODEL, default=default_controller): vol.In(controller_options),
-                vol.Optional(CONF_SENSOR_ID): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
+                vol.Required("devices"): SelectSelector(
+                    SelectSelectorConfig(
+                        options=device_options,
+                        multiple=True,
+                        mode=SelectSelectorMode.LIST
+                    )
                 ),
             }),
             errors=errors,
         )
 
-    async def _get_devices_with_ssid(self, usr_id, ssid):
-        """仅使用 SSID 尝试获取设备列表 (用于验证 Session)"""
-        headers = {'User-Agent': 'SmartApp', 'Content-Type': 'application/json', 'Cookie': f"SSID={ssid}"}
-        
-        domain_data = self.hass.data.get(DOMAIN, {})
-        session_cache = domain_data.get("session")
-        
-        if not session_cache or 'familyId' not in session_cache:
-            return None
+    async def async_step_device_config(self, user_input=None):
+        """步骤3: 为选中的每个设备配置型号 (递归)"""
+        if self._current_device_index >= len(self._selected_device_ids):
+            # 完成所有选定设备的配置
+            return self.async_create_entry(
+                title=f"松下账号 ({self._username})",
+                data={
+                    CONF_USERNAME: self._username,
+                    CONF_USR_ID: self._usr_id,
+                    CONF_SSID: self._ssid,
+                    CONF_FAMILY_ID: self._family_id,
+                    CONF_REAL_FAMILY_ID: self._real_family_id,
+                    CONF_DEVICES: self._configured_devices
+                }
+            )
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(URL_GET_DEV, json={
-                    "id": 3, "uiVersion": 4.0,
-                    "params": {
-                        "realFamilyId": session_cache['realFamilyId'], 
-                        "familyId": session_cache['familyId'], 
-                        "usrId": usr_id
-                    }
-                }, headers=headers, ssl=False) as resp:
-                    if resp.status != 200: return None
-                    dev_res = await resp.json()
-                    if 'results' not in dev_res: return None
-                    
-                    devices = {}
-                    for dev in dev_res['results']['devList']:
-                        devices[dev['deviceId']] = dev['params']
-                    return devices
-        except:
-            return None
+        current_did = self._selected_device_ids[self._current_device_index]
+        dev_info = self._devices.get(current_did, {})
+        dev_name = dev_info.get("deviceName", "Unknown")
+
+        if user_input is not None:
+            token = self._generate_token(current_did)
+            self._configured_devices[current_did] = {
+                "deviceName": dev_name,
+                CONF_CONTROLLER_MODEL: user_input[CONF_CONTROLLER_MODEL],
+                CONF_SENSOR_ID: user_input.get(CONF_SENSOR_ID),
+                CONF_TOKEN: token
+            }
+            self._current_device_index += 1
+            return await self.async_step_device_config()
+
+        # 查找匹配的控制器
+        category = extract_category_from_device_id(current_did)
+        matching = find_controllers_for_category(category)
+        controller_options = {k: v["name"] for k, v in matching.items()}
+        if not controller_options:
+             controller_options = {k: v["name"] for k, v in SUPPORTED_CONTROLLERS.items()}
+             
+        default_controller = list(controller_options.keys())[0] if controller_options else "CZ-RD501DW2"
+
+        return self.async_show_form(
+            step_id="device_config",
+            title_placeholders={"name": dev_name},
+            data_schema=vol.Schema({
+                vol.Required(CONF_CONTROLLER_MODEL, default=default_controller): vol.In(controller_options),
+                vol.Optional(CONF_SENSOR_ID): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+            }),
+        )
 
     async def _authenticate_full_flow(self, username, password):
         """完整的登录流程"""
@@ -240,8 +227,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 res = login_res['results']
                 real_usr_id = res['usrId']
                 ssid = res['ssId']
-                
-                self._temp_login_info = {
+                family_info = {
                     'realFamilyId': res['realFamilyId'],
                     'familyId': res['familyId']
                 }
@@ -257,34 +243,85 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if 'results' in dev_res and 'devList' in dev_res['results']:
                     for dev in dev_res['results']['devList']:
                         devices[dev['deviceId']] = dev['params']
-                return real_usr_id, ssid, devices
+                return real_usr_id, ssid, family_info, devices
 
     def _generate_token(self, device_id):
-        """
-        Generate SHA512 token from device_id.
-        
-        deviceId format: MAC_CATEGORY_SUFFIX (e.g., A1B2C3D4E5F6_0900_1234)
-        使用 split('_', 2) 安全分割，兼容后缀中可能包含下划线的设备 ID
-        """
+        """Generate SHA512 token from device_id."""
         try:
             did = device_id.upper()
-            
             parts = did.split('_', 2)
-            if len(parts) < 3:
-                _LOGGER.error("Invalid deviceId format: %s (expected MAC_CATEGORY_SUFFIX)", device_id)
-                return None
+            if len(parts) < 3: return None
             
             mac_part = parts[0]
             category = parts[1]
             suffix = parts[2]
             
-            if len(mac_part) < 6:
-                _LOGGER.error("Invalid MAC part in deviceId: %s", device_id)
-                return None
+            if len(mac_part) < 6: return None
             
             stoken = mac_part[6:] + '_' + category + '_' + mac_part[:6]
             inner = hashlib.sha512(stoken.encode()).hexdigest()
             return hashlib.sha512((inner + '_' + suffix).encode()).hexdigest()
-        except Exception as e:
-            _LOGGER.error("Token generation failed for deviceId %s: %s", device_id, e)
+        except Exception:
             return None
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return PanasonicOptionsFlow(config_entry)
+
+class PanasonicOptionsFlow(config_entries.OptionsFlow):
+    """配置项管理：修改已添加设备的控制器型号或传感器"""
+    
+    def __init__(self, config_entry):
+        self.config_entry = config_entry
+        self._devices = config_entry.data.get(CONF_DEVICES, {})
+        self._selected_did = None
+
+    async def async_step_init(self, user_input=None):
+        """Options flow 主界面"""
+        if user_input is not None:
+            self._selected_did = user_input[CONF_DEVICE_ID]
+            return await self.async_step_edit_device()
+
+        device_options = {did: info.get("deviceName", did) for did, info in self._devices.items()}
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Required(CONF_DEVICE_ID): vol.In(device_options),
+            }),
+        )
+
+    async def async_step_edit_device(self, user_input=None):
+        """配置具体设备的细节"""
+        if user_input is not None:
+            new_devices = dict(self._devices)
+            new_devices[self._selected_did].update({
+                CONF_CONTROLLER_MODEL: user_input[CONF_CONTROLLER_MODEL],
+                CONF_SENSOR_ID: user_input.get(CONF_SENSOR_ID)
+            })
+            
+            # 更新 Entry Data
+            new_data = dict(self.config_entry.data)
+            new_data[CONF_DEVICES] = new_devices
+            self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+            
+            return self.async_create_entry(title="", data={})
+
+        current_config = self._devices[self._selected_did]
+        
+        category = extract_category_from_device_id(self._selected_did)
+        matching = find_controllers_for_category(category)
+        controller_options = {k: v["name"] for k, v in matching.items()}
+        if not controller_options:
+             controller_options = {k: v["name"] for k, v in SUPPORTED_CONTROLLERS.items()}
+
+        return self.async_show_form(
+            step_id="edit_device",
+            data_schema=vol.Schema({
+                vol.Required(CONF_CONTROLLER_MODEL, default=current_config.get(CONF_CONTROLLER_MODEL)): vol.In(controller_options),
+                vol.Optional(CONF_SENSOR_ID, default=current_config.get(CONF_SENSOR_ID)): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+            }),
+        )
