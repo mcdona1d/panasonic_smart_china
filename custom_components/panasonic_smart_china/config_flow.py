@@ -371,7 +371,9 @@ class PanasonicOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_SENSOR_ID,
                         default=current.get(CONF_SENSOR_ID),
-                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    ): EntitySelector(
+                        EntitySelectorConfig(domain="sensor", device_class="temperature")
+                    ),
                 }
             ),
         )
