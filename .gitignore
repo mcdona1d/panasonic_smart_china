@@ -3,3 +3,4 @@ script/
 .DS_Store
 custom_components/.DS_Store
 custom_components/*.zip
+Docs/
