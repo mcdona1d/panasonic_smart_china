@@ -21,6 +21,7 @@ from .api import PanasonicApiAuthError, PanasonicApiClient, PanasonicApiError
 from .const import (
     CONF_CONTROLLER_MODEL,
     CONF_DEVICE_ID,
+    CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
     CONF_DEVICES,
     CONF_ENABLED,
@@ -101,6 +102,7 @@ class PanasonicBaseEntity(ClimateEntity):
         self._usr_id = config[CONF_USR_ID]
         self._device_id = config[CONF_DEVICE_ID]
         self._token = config[CONF_TOKEN]
+        self._model = config.get(CONF_DEVICE_MODEL) or config.get(CONF_CONTROLLER_MODEL)
         self._api = client
         self._attr_name = name
         self._attr_unique_id = f"panasonic_smart_china_{self._device_id}_climate"
@@ -138,6 +140,7 @@ class PanasonicBaseEntity(ClimateEntity):
             identifiers={(DOMAIN, self._device_id)},
             name=self._attr_name,
             manufacturer="Panasonic",
+            model=self._model,
             via_device=(DOMAIN, self._usr_id),
         )
 

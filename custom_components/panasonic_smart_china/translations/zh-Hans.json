@@ -49,6 +49,7 @@
       },
       "edit_device": {
         "title": "编辑设备",
+        "description": "设备型号：{device_model}",
         "data": {
           "enabled": "启用设备",
           "sensor_entity_id": "关联室温传感器（可选）"

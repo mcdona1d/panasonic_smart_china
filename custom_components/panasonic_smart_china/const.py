@@ -14,6 +14,7 @@ CONF_FAMILY_ID = "familyId"
 CONF_REAL_FAMILY_ID = "realFamilyId"
 CONF_DEVICES = "devices"
 CONF_DEVICE_NAME = "deviceName"
+CONF_DEVICE_MODEL = "device_model"
 CONF_CATEGORY = "category"
 CONF_ENABLED = "enabled"
 

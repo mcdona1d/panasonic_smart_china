@@ -23,6 +23,7 @@ from .const import (
     CONF_CATEGORY,
     CONF_CONTROLLER_MODEL,
     CONF_DEVICE_ID,
+    CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
     CONF_DEVICES,
     CONF_ENABLED,
@@ -41,6 +42,14 @@ from .token import DeviceTokenError, generate_device_token
 
 _LOGGER = logging.getLogger(__name__)
 RESCAN_DEVICES = "__rescan_devices__"
+MODEL_FIELD_CANDIDATES = (
+    "devSubTypeId",
+    "devType",
+    "deviceModel",
+    "model",
+    "modelName",
+    "productModel",
+)
 
 
 class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -130,7 +139,11 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         options = [
             {
                 "value": device_id,
-                "label": f"{info.get('deviceName', 'Unknown')} ({device_id})",
+                "label": _format_device_label(
+                    info.get("deviceName", "Unknown"),
+                    _extract_device_model(info, None),
+                    device_id,
+                ),
             }
             for device_id, info in supported_devices.items()
         ]
@@ -216,6 +229,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             controller_model = list(matching.keys())[0]
             dev_info = self._devices.get(device_id, {})
+            device_model = _extract_device_model(dev_info, controller_model)
             try:
                 token = generate_device_token(device_id)
             except DeviceTokenError as err:
@@ -224,6 +238,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             configured[device_id] = {
                 CONF_DEVICE_NAME: dev_info.get("deviceName", "Panasonic Device"),
+                CONF_DEVICE_MODEL: device_model,
                 CONF_CATEGORY: support_info.get("category"),
                 CONF_CONTROLLER_MODEL: controller_model,
                 CONF_TOKEN: token,
@@ -261,7 +276,11 @@ class PanasonicOptionsFlow(config_entries.OptionsFlow):
         device_options = {
             RESCAN_DEVICES: "重新扫描账号设备",
             **{
-                device_id: info.get(CONF_DEVICE_NAME, device_id)
+                device_id: _format_device_label(
+                    info.get(CONF_DEVICE_NAME, device_id),
+                    info.get(CONF_DEVICE_MODEL) or info.get(CONF_CONTROLLER_MODEL),
+                    device_id,
+                )
                 for device_id, info in devices.items()
             },
         }
@@ -311,6 +330,10 @@ class PanasonicOptionsFlow(config_entries.OptionsFlow):
                         "deviceName",
                         devices[device_id].get(CONF_DEVICE_NAME, device_id),
                     )
+                    devices[device_id][CONF_DEVICE_MODEL] = _extract_device_model(
+                        device_info,
+                        devices[device_id].get(CONF_CONTROLLER_MODEL),
+                    )
                     continue
 
                 category = extract_category_from_device_id(device_id)
@@ -326,6 +349,7 @@ class PanasonicOptionsFlow(config_entries.OptionsFlow):
 
                 devices[device_id] = {
                     CONF_DEVICE_NAME: device_info.get("deviceName", "Panasonic Device"),
+                    CONF_DEVICE_MODEL: _extract_device_model(device_info, list(matching.keys())[0]),
                     CONF_CATEGORY: category,
                     CONF_CONTROLLER_MODEL: list(matching.keys())[0],
                     CONF_TOKEN: token,
@@ -365,6 +389,11 @@ class PanasonicOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="edit_device",
+            description_placeholders={
+                "device_model": current.get(CONF_DEVICE_MODEL)
+                or current.get(CONF_CONTROLLER_MODEL)
+                or "Unknown",
+            },
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_ENABLED, default=current.get(CONF_ENABLED, True)): bool,
@@ -377,3 +406,23 @@ class PanasonicOptionsFlow(config_entries.OptionsFlow):
                 }
             ),
         )
+
+
+def _extract_device_model(device_info: dict[str, Any], fallback: str | None) -> str | None:
+    """Return the best model-like value from a Panasonic device info payload."""
+    for field in MODEL_FIELD_CANDIDATES:
+        value = device_info.get(field)
+        if value:
+            return str(value)
+    return fallback
+
+
+def _format_device_label(name: str, model: str | None, device_id: str | None = None) -> str:
+    """Format a device option label with model information."""
+    if model and device_id:
+        return f"{name} - {model} ({device_id})"
+    if model:
+        return f"{name} - {model}"
+    if device_id:
+        return f"{name} ({device_id})"
+    return name
