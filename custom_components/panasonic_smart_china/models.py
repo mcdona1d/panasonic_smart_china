@@ -6,12 +6,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 PLATFORM_CLIMATE = "climate"
+PLATFORM_SENSOR = "sensor"
+PLATFORM_SWITCH = "switch"
+PLATFORM_NUMBER = "number"
+PLATFORM_SELECT = "select"
 
 ENTITY_KIND_DUCTED_AC = "ducted_ac"
 ENTITY_KIND_BATHROOM_HEATER = "bathroom_heater"
+ENTITY_KIND_WASHER = "washer"
+ENTITY_KIND_DRYER = "dryer"
+ENTITY_KIND_FRIDGE = "fridge"
+ENTITY_KIND_KNOB = "knob"
 
 PROTOCOL_AC_STATUS = "ac_status"
 PROTOCOL_BATHROOM_HEATER = "bathroom_heater"
+PROTOCOL_GENERIC_STATUS = "generic_status"
 
 TOKEN_STRATEGY_DEVICE_ID_SHA512 = "device_id_sha512"
 
@@ -25,6 +34,57 @@ class PanasonicEndpoint:
     require_results: bool
     required_result_keys: frozenset[str] = frozenset()
     allow_non_json_response: bool = False
+
+
+@dataclass(frozen=True)
+class PanasonicSensorDescription:
+    """描述一个要暴露成 HA sensor 的状态字段。"""
+
+    key: str
+    source_key: str
+    name: str
+    device_class: str | None = None
+    unit: str | None = None
+    state_class: str | None = None
+    value_map: dict = field(default_factory=dict)
+    scale: float | None = None
+
+
+@dataclass(frozen=True)
+class PanasonicSwitchDescription:
+    """描述一个 HA switch（洗衣机电源/开始暂停、冰箱布尔开关、旋钮找一找）。"""
+
+    key: str
+    name: str
+    state_key: str
+    state_on: frozenset = frozenset({1})
+    on_change: dict = field(default_factory=dict)
+    off_change: dict = field(default_factory=dict)
+    require_door_closed: bool = False
+
+
+@dataclass(frozen=True)
+class PanasonicNumberDescription:
+    """描述一个 HA number（如冰箱各温区目标温度）。"""
+
+    key: str
+    source_key: str
+    name: str
+    min_value: float = 0
+    max_value: float = 100
+    step: float = 1
+    unit: str | None = None
+    device_class: str | None = None
+
+
+@dataclass(frozen=True)
+class PanasonicSelectDescription:
+    """描述一个 HA select（如洗衣机/烘干机程序选择）。"""
+
+    key: str
+    source_key: str
+    name: str
+    options: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -51,6 +111,10 @@ class PanasonicProfile:
     cookie_required: bool = False
     referer_template: str | None = None
     extra_control_headers: dict[str, str] = field(default_factory=dict)
+    sensor_descriptions: tuple[PanasonicSensorDescription, ...] = ()
+    control_switches: tuple[PanasonicSwitchDescription, ...] = ()
+    control_numbers: tuple[PanasonicNumberDescription, ...] = ()
+    control_selects: tuple[PanasonicSelectDescription, ...] = ()
 
     def matches_category(self, category_id: str | None) -> bool:
         """Return whether this profile supports a Panasonic category id."""

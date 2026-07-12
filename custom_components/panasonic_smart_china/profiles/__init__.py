@@ -1,4 +1,9 @@
-"""Device profile registry."""
+"""Device profile registry.
+
+★ 这是改好的完整文件，直接覆盖 custom_components/panasonic_smart_china/profiles/__init__.py ★
+相比原版只多了两处：顶部多 4 行 import，SUPPORTED_PROFILES 里多注册 4 个 profile。
+其余函数原封未动。
+"""
 
 from __future__ import annotations
 
@@ -9,12 +14,20 @@ from .bathroom_heater_0820_fv_rb20vl1 import (
     BATHROOM_HEATER_0820_FV_RB20VL1_PROFILE,
 )
 from .ducted_ac_0900 import DUCTED_AC_0900_PROFILE
+from .washer_0600 import WASHER_0600_PROFILE
+from .dryer_0610 import DRYER_0610_PROFILE
+from .fridge_0100 import FRIDGE_0100_PROFILE
+from .knob_0630 import KNOB_0630_PROFILE
 
 SUPPORTED_PROFILES = {
     DUCTED_AC_0900_PROFILE.profile_id: DUCTED_AC_0900_PROFILE,
     BATHROOM_HEATER_0820_FV_RB20VL1_PROFILE.profile_id: (
         BATHROOM_HEATER_0820_FV_RB20VL1_PROFILE
     ),
+    WASHER_0600_PROFILE.profile_id: WASHER_0600_PROFILE,
+    DRYER_0610_PROFILE.profile_id: DRYER_0610_PROFILE,
+    FRIDGE_0100_PROFILE.profile_id: FRIDGE_0100_PROFILE,
+    KNOB_0630_PROFILE.profile_id: KNOB_0630_PROFILE,
 }
 
 SUPPORTED_CONTROLLERS = {
