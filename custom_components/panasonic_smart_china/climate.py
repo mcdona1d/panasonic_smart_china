@@ -236,9 +236,13 @@ class PanasonicBaseEntity(ClimateEntity):
             _LOGGER.error("Panasonic session expired for %s: %s", self._device_id, err)
             raise ConfigEntryAuthFailed("Panasonic Smart China session expired") from err
         except PanasonicApiError as err:
-            if update_internal_state:
+            if update_internal_state and not self._last_params:
                 self._available = False
-            _LOGGER.debug("Fetch status failed for %s: %s", self._device_id, err)
+            _LOGGER.warning(
+                "Fetch status failed for %s; keeping last known state: %s",
+                self._device_id,
+                err,
+            )
             return None
 
     # --- 命令发送 ---
@@ -251,6 +255,14 @@ class PanasonicBaseEntity(ClimateEntity):
 
         if latest_params:
             current_params = latest_params.copy()
+        elif self._last_params:
+            _LOGGER.warning(
+                "Could not fetch latest status for %s; using cached state for "
+                "command %s.",
+                self._device_id,
+                changes,
+            )
+            current_params = self._last_params.copy()
         else:
             _LOGGER.warning(
                 "Could not fetch latest status for %s; aborting command %s.",
