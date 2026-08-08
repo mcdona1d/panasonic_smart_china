@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from ..models import PanasonicProfile
+from .aircon_common_0900 import AIRCON_COMMON_0900_PROFILE
 from .bathroom_heater_0820_fv_rb20vl1 import (
     BATHROOM_HEATER_0820_FV_RB20VL1_PROFILE,
 )
 from .ducted_ac_0900 import DUCTED_AC_0900_PROFILE
 
 SUPPORTED_PROFILES = {
+    AIRCON_COMMON_0900_PROFILE.profile_id: AIRCON_COMMON_0900_PROFILE,
     DUCTED_AC_0900_PROFILE.profile_id: DUCTED_AC_0900_PROFILE,
     BATHROOM_HEATER_0820_FV_RB20VL1_PROFILE.profile_id: (
         BATHROOM_HEATER_0820_FV_RB20VL1_PROFILE
