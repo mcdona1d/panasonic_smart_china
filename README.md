@@ -61,6 +61,11 @@
 
 ## 安装方式
 
+### 兼容性
+
+* Home Assistant Core 2026.8.0 或更高版本。
+* 2.1.1 起使用 2026.8 引入的 `DeviceInfo.via_device_id`，不再兼容 2026.7 及更早版本。
+
 ### HACS 自定义仓库
 
 1. 打开 HACS。

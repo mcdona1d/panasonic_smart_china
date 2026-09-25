@@ -61,6 +61,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     """Create climate entities for enabled devices under an account entry."""
     runtime = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
     client = runtime.get("client") or PanasonicApiClient(hass, entry.data.get(CONF_SSID))
+    account_device_id = runtime.get("account_device_id")
     devices = entry.data.get(CONF_DEVICES, {})
 
     entities = []
@@ -102,6 +103,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 device_config.get(CONF_DEVICE_NAME, device_id),
                 profile,
                 client,
+                account_device_id,
             )
         )
 
@@ -114,7 +116,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class PanasonicBaseEntity(ClimateEntity):
     """松下设备基类 — 包含轮询、状态获取、命令发送等通用逻辑"""
 
-    def __init__(self, hass, entry, config, name, profile, client):
+    def __init__(self, hass, entry, config, name, profile, client, account_device_id):
         self._hass = hass
         self._entry = entry
         self._usr_id = config[CONF_USR_ID]
@@ -122,6 +124,7 @@ class PanasonicBaseEntity(ClimateEntity):
         self._token = config[CONF_TOKEN]
         self._model = config.get(CONF_DEVICE_MODEL) or config.get(CONF_CONTROLLER_MODEL)
         self._api = client
+        self._account_device_id = account_device_id
         self._attr_name = name
         self._attr_unique_id = f"panasonic_smart_china_{self._device_id}_climate"
 
@@ -154,13 +157,15 @@ class PanasonicBaseEntity(ClimateEntity):
 
     @property
     def device_info(self):
-        return DeviceInfo(
+        device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
             name=self._attr_name,
             manufacturer="Panasonic",
             model=self._model,
-            via_device=(DOMAIN, self._usr_id),
         )
+        if self._account_device_id:
+            device_info["via_device_id"] = self._account_device_id
+        return device_info
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
@@ -333,8 +338,10 @@ class PanasonicBaseEntity(ClimateEntity):
 class PanasonicACEntity(PanasonicBaseEntity):
     """松下空调实体 — 支持温度设置、风速控制"""
 
-    def __init__(self, hass, entry, config, name, profile, client):
-        super().__init__(hass, entry, config, name, profile, client)
+    def __init__(self, hass, entry, config, name, profile, client, account_device_id):
+        super().__init__(
+            hass, entry, config, name, profile, client, account_device_id
+        )
         self._sensor_id = config.get(CONF_SENSOR_ID)
         self._fan_map = profile.fan_mapping
         self._fan_overrides = profile.fan_payload_overrides
