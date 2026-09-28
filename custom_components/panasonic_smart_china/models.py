@@ -43,6 +43,8 @@ class PanasonicProfile:
     model_ids: frozenset[str] = frozenset()
     token_strategy: str = TOKEN_STRATEGY_DEVICE_ID_SHA512
     temp_scale: int = 1
+    power_on_value: int = 1
+    power_off_value: int = 0
     default_hvac_mode: Any | None = None
     hvac_mapping: dict[Any, int] = field(default_factory=dict)
     fan_mapping: dict[str, int] = field(default_factory=dict)

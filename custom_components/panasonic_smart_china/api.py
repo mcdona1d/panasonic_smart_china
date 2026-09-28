@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import hashlib
 from typing import Any
@@ -19,6 +20,8 @@ URL_GET_TOKEN = f"{BASE_URL}/UsrGetToken"
 
 AUTH_ERROR_CODES = {"3003", "3004", "403", "4102"}
 SUCCESS_ERROR_CODES = {None, "", 0, "0", "0000"}
+REQUEST_ATTEMPTS = 3
+RETRY_DELAYS = (0.75, 2.0)
 
 
 class PanasonicApiError(Exception):
@@ -186,6 +189,33 @@ class PanasonicApiClient:
         )
 
     async def _post(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        *,
+        headers: dict[str, str],
+        require_results: bool,
+        allow_non_json_response: bool = False,
+    ) -> dict[str, Any]:
+        for attempt in range(REQUEST_ATTEMPTS):
+            try:
+                return await self._post_once(
+                    url,
+                    payload,
+                    headers=headers,
+                    require_results=require_results,
+                    allow_non_json_response=allow_non_json_response,
+                )
+            except PanasonicApiAuthError:
+                raise
+            except PanasonicApiResponseError:
+                if attempt == REQUEST_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(RETRY_DELAYS[attempt])
+
+        raise PanasonicApiResponseError(f"Request failed after retries: {url}")
+
+    async def _post_once(
         self,
         url: str,
         payload: dict[str, Any],

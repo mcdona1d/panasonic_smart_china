@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.components.climate import ClimateEntity
@@ -16,6 +18,7 @@ from homeassistant.const import (
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.storage import Store
 
 from .api import PanasonicApiAuthError, PanasonicApiClient, PanasonicApiError
 from .const import (
@@ -141,6 +144,11 @@ class PanasonicBaseEntity(ClimateEntity):
         self._target_temperature = 26.0
         self._last_active_target_temperature = self._target_temperature
         self._last_params = {}
+        self._store = Store(
+            hass, 1, f"{DOMAIN}.climate_cache.{entry.entry_id}.{self._device_id}"
+        )
+        self._command_lock = asyncio.Lock()
+        self._last_command_monotonic = 0.0
 
         # 定时器句柄
         self._unsub_polling = None
@@ -169,6 +177,13 @@ class PanasonicBaseEntity(ClimateEntity):
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
+        if not self._last_params:
+            cached = await self._store.async_load()
+            if isinstance(cached, dict) and cached:
+                self._last_params = cached
+                self._available = True
+                self._update_local_state(cached)
+                self.async_write_ha_state()
         self._unsub_polling = async_track_time_interval(
             self._hass, self._async_update_interval_wrapper, POLLING_INTERVAL
         )
@@ -232,6 +247,7 @@ class PanasonicBaseEntity(ClimateEntity):
                 self._token,
             )
             self._last_params = res.copy()
+            self._store.async_delay_save(lambda: self._last_params.copy(), 1)
             if update_internal_state:
                 self._available = True
                 self._update_local_state(res)
@@ -241,56 +257,76 @@ class PanasonicBaseEntity(ClimateEntity):
             _LOGGER.error("Panasonic session expired for %s: %s", self._device_id, err)
             raise ConfigEntryAuthFailed("Panasonic Smart China session expired") from err
         except PanasonicApiError as err:
-            if update_internal_state:
+            if update_internal_state and not self._last_params:
                 self._available = False
-            _LOGGER.debug("Fetch status failed for %s: %s", self._device_id, err)
+            _LOGGER.warning(
+                "Fetch status failed for %s; keeping last known state: %s",
+                self._device_id,
+                err,
+            )
             return None
 
     # --- 命令发送 ---
 
     async def _send_command(self, changes):
         """Read-Modify-Write 核心逻辑 (子类可覆盖 payload 构建)"""
+        async with self._command_lock:
+            # The cloud may return stale state for several seconds after a
+            # successful write. Merge rapid HomeKit commands into the latest
+            # optimistic payload instead of overwriting the previous command.
+            now = time.monotonic()
+            if self._last_params and now - self._last_command_monotonic < 15:
+                current_params = self._last_params.copy()
+            else:
+                latest_params = await self._fetch_status(update_internal_state=False)
+                if latest_params:
+                    current_params = latest_params.copy()
+                elif self._last_params:
+                    _LOGGER.warning(
+                        "Could not fetch latest status for %s; using cached "
+                        "state for command %s.",
+                        self._device_id,
+                        changes,
+                    )
+                    current_params = self._last_params.copy()
+                else:
+                    _LOGGER.warning(
+                        "Could not fetch latest status for %s and no cached "
+                        "state exists; aborting command %s.",
+                        self._device_id,
+                        changes,
+                    )
+                    return
 
-        # 1. Read
-        latest_params = await self._fetch_status(update_internal_state=False)
+            params = self._build_send_payload(changes, current_params)
+            try:
+                await self._api.set_device_status(
+                    self._profile,
+                    self._usr_id,
+                    self._device_id,
+                    self._token,
+                    params,
+                )
+            except PanasonicApiAuthError as err:
+                self._available = False
+                _LOGGER.error(
+                    "Panasonic session expired while setting %s: %s",
+                    self._device_id,
+                    err,
+                )
+                raise ConfigEntryAuthFailed(
+                    "Panasonic Smart China session expired"
+                ) from err
+            except PanasonicApiError as err:
+                _LOGGER.error("Set failed for %s: %s", self._device_id, err)
+                return
 
-        if latest_params:
-            current_params = latest_params.copy()
-        else:
-            _LOGGER.warning(
-                "Could not fetch latest status for %s; aborting command %s.",
-                self._device_id,
-                changes,
-            )
-            return
-
-        # 2. Build payload (委托给子类)
-        params = self._build_send_payload(changes, current_params)
-
-        # 3. Write
-        try:
-            await self._api.set_device_status(
-                self._profile,
-                self._usr_id,
-                self._device_id,
-                self._token,
-                params,
-            )
-        except PanasonicApiAuthError as err:
-            self._available = False
-            _LOGGER.error("Panasonic session expired while setting %s: %s", self._device_id, err)
-            raise ConfigEntryAuthFailed("Panasonic Smart China session expired") from err
-        except PanasonicApiError as err:
-            _LOGGER.error("Set failed for %s: %s", self._device_id, err)
-            return
-
-        # 4. 仅在服务端接受指令后更新本地状态
-        self._available = True
-        self._last_params.update(params)
-        self._update_local_state(self._last_params)
-
-        # 5. 强制通知 HA 刷新界面
-        self.async_write_ha_state()
+            self._available = True
+            self._last_params = params.copy()
+            self._last_command_monotonic = time.monotonic()
+            self._store.async_delay_save(lambda: self._last_params.copy(), 1)
+            self._update_local_state(self._last_params)
+            self.async_write_ha_state()
 
     # --- 子类必须实现的方法 ---
 
@@ -381,7 +417,9 @@ class PanasonicACEntity(PanasonicBaseEntity):
         return None
 
     def _update_local_state(self, res):
-        self._is_on = (_as_int(res.get('runStatus')) == 1)
+        self._is_on = (
+            _as_int(res.get("runStatus")) == self._profile.power_on_value
+        )
 
         p_mode = _as_int(res.get('runMode'))
         for ha_mode, pm in self._hvac_map.items():
@@ -415,21 +453,23 @@ class PanasonicACEntity(PanasonicBaseEntity):
     def _build_hvac_command(self, hvac_mode):
         p_mode = self._hvac_map.get(hvac_mode, self._hvac_map[self._default_hvac_mode])
         return {
-            "runStatus": 1,
+            "runStatus": self._profile.power_on_value,
             "runMode": p_mode,
             "setTemperature": int(self._last_active_target_temperature * self._temp_scale),
         }
 
     def _build_on_command(self):
-        hvac_mode = self._hvac_mode if self._hvac_mode != HVACMode.OFF else self._default_hvac_mode
+        # A plain HomeKit/Siri "turn on" should not unexpectedly resume a
+        # stale HEAT mode during cooling season.
+        hvac_mode = self._default_hvac_mode
         return {
-            "runStatus": 1,
+            "runStatus": self._profile.power_on_value,
             "runMode": self._hvac_map.get(hvac_mode, self._hvac_map[self._default_hvac_mode]),
             "setTemperature": int(self._last_active_target_temperature * self._temp_scale),
         }
 
     def _build_off_command(self):
-        return {"runStatus": 0}
+        return {"runStatus": self._profile.power_off_value}
 
     def _build_send_payload(self, changes, current_params):
         """空调：Read-Modify-Write + safe_keys 过滤"""
