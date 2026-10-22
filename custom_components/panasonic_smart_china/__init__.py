@@ -5,7 +5,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from .api import PanasonicApiClient
-from .const import CONF_SSID, CONF_USR_ID, DOMAIN
+from homeassistant.const import CONF_PASSWORD
+
+from .const import CONF_SSID, CONF_USERNAME, CONF_USR_ID, DOMAIN
 from .profiles import supported_platforms
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,7 +47,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # reference an existing parent by its device-registry id.
     account_device_id = _async_create_account_device(hass, entry)
     hass.data[DOMAIN][entry.entry_id] = {
-        "client": PanasonicApiClient(hass, entry.data.get(CONF_SSID)),
+        "client": PanasonicApiClient(
+            hass,
+            entry.data.get(CONF_SSID),
+            entry.data.get(CONF_USERNAME),
+            entry.data.get(CONF_PASSWORD),
+        ),
         "account_device_id": account_device_id,
     }
 

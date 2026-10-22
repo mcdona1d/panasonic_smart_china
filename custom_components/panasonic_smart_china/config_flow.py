@@ -64,6 +64,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._username: str | None = None
+        self._password: str | None = None
         self._usr_id: str | None = None
         self._ssid: str | None = None
         self._family_id: str | None = None
@@ -89,6 +90,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return self.async_abort(reason="no_devices_found")
 
                 self._username = user_input[CONF_USERNAME]
+                self._password = user_input[CONF_PASSWORD]
                 self._usr_id = login.usr_id
                 self._ssid = login.ssid
                 self._family_id = login.family_id
@@ -139,6 +141,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         title=f"松下账号 ({self._username})",
                         data={
                             CONF_USERNAME: self._username,
+                            CONF_PASSWORD: self._password,
                             CONF_USR_ID: self._usr_id,
                             CONF_SSID: self._ssid,
                             CONF_FAMILY_ID: self._family_id,
@@ -203,6 +206,7 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 reauth_entry = self._get_reauth_entry()
                 new_data = dict(reauth_entry.data)
+                new_data[CONF_PASSWORD] = user_input[CONF_PASSWORD]
                 new_data[CONF_USR_ID] = login.usr_id
                 new_data[CONF_SSID] = login.ssid
                 new_data[CONF_FAMILY_ID] = login.family_id
@@ -213,6 +217,48 @@ class PanasonicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
             errors=errors,
+        )
+
+    async def async_step_reconfigure(self, user_input=None):
+        """Re-login and refresh the cloud session of an existing entry.
+
+        Panasonic China only keeps one active session per account: when the
+        phone App logs in again, the session stored in Home Assistant becomes
+        invalid. This step lets the user refresh it from the entry menu
+        (设置 -> 设备与服务 -> Panasonic Smart China -> 重新配置).
+        """
+        errors = {}
+        entry = self._get_reconfigure_entry()
+        username = entry.data.get(CONF_USERNAME) or self._username
+
+        if user_input is not None:
+            try:
+                login = await PanasonicApiClient(self.hass).authenticate(
+                    username,
+                    user_input[CONF_PASSWORD],
+                )
+            except PanasonicApiError as err:
+                _LOGGER.error("Reconfigure login failed: %s", err)
+                errors["base"] = "cannot_connect"
+            else:
+                new_data = dict(entry.data)
+                new_data[CONF_USERNAME] = username
+                new_data[CONF_PASSWORD] = user_input[CONF_PASSWORD]
+                new_data[CONF_USR_ID] = login.usr_id
+                new_data[CONF_SSID] = login.ssid
+                new_data[CONF_FAMILY_ID] = login.family_id
+                new_data[CONF_REAL_FAMILY_ID] = login.real_family_id
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data=new_data,
+                    reason="reconfigure_successful",
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            errors=errors,
+            description_placeholders={"username": username or ""},
         )
 
     def _analyze_device_support(self) -> None:
