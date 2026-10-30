@@ -6,12 +6,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 PLATFORM_CLIMATE = "climate"
+PLATFORM_HUMIDIFIER = "humidifier"
+PLATFORM_SWITCH = "switch"
+PLATFORM_SENSOR = "sensor"
+PLATFORM_SELECT = "select"
 
 ENTITY_KIND_DUCTED_AC = "ducted_ac"
 ENTITY_KIND_BATHROOM_HEATER = "bathroom_heater"
+ENTITY_KIND_HUMIDIFIER = "humidifier"
+ENTITY_KIND_HUMIDIFIER_SWITCH = "humidifier_switch"
+ENTITY_KIND_HUMIDIFIER_SENSOR = "humidifier_sensor"
+ENTITY_KIND_HUMIDIFIER_SELECT = "humidifier_select"
 
 PROTOCOL_AC_STATUS = "ac_status"
 PROTOCOL_BATHROOM_HEATER = "bathroom_heater"
+PROTOCOL_AIRCLE_RUNNING_MODE = "aircle_running_mode"
 
 TOKEN_STRATEGY_DEVICE_ID_SHA512 = "device_id_sha512"
 
@@ -25,6 +34,8 @@ class PanasonicEndpoint:
     require_results: bool
     required_result_keys: frozenset[str] = frozenset()
     allow_non_json_response: bool = False
+    # 部分设备族（如 Humi 系列）要求 usrId/deviceId/token 全部放在 params 里
+    nested_params: bool = False
 
 
 @dataclass(frozen=True)

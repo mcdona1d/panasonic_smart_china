@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import hashlib
 from typing import Any
@@ -10,7 +11,11 @@ import async_timeout
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+import logging
+
 from .models import PanasonicEndpoint, PanasonicProfile
+
+_LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://app.psmartcloud.com/App"
 URL_LOGIN = f"{BASE_URL}/UsrLogin"
@@ -47,9 +52,19 @@ class LoginResult:
 class PanasonicApiClient:
     """Small async client for the reverse engineered Panasonic cloud API."""
 
-    def __init__(self, hass: HomeAssistant, ssid: str | None = None) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        ssid: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+    ) -> None:
         self._hass = hass
         self.ssid = ssid
+        self._username = username
+        self._password = password
+        self._authenticating = False
+        self._relogin_lock: asyncio.Lock | None = None
 
     async def authenticate(self, username: str, password: str) -> LoginResult:
         """Run the full login flow and return the account devices."""
@@ -60,7 +75,7 @@ class PanasonicApiClient:
                 "uiVersion": 4.0,
                 "params": {"usrId": username},
             },
-            headers=self._app_headers(),
+            headers=self._app_headers,
             require_results=True,
         )
         token_start = token_res["results"].get("token")
@@ -83,7 +98,7 @@ class PanasonicApiClient:
                     "pwd": final_token,
                 },
             },
-            headers=self._app_headers(),
+            headers=self._app_headers,
             require_results=True,
         )
         results = login_res["results"]
@@ -117,7 +132,7 @@ class PanasonicApiClient:
                     "usrId": usr_id,
                 },
             },
-            headers=self._app_headers(include_cookie=True),
+            headers=lambda: self._app_headers(include_cookie=True),
             require_results=True,
         )
 
@@ -138,15 +153,19 @@ class PanasonicApiClient:
     ) -> dict[str, Any]:
         """Fetch the latest status for a supported device profile."""
         endpoint = profile.status_endpoint
-        res = await self._post(
-            self._endpoint_url(endpoint),
-            {
-                "id": endpoint.request_id,
+        payload: dict[str, Any] = {"id": endpoint.request_id}
+        if endpoint.nested_params:
+            payload["params"] = {
                 "usrId": usr_id,
                 "deviceId": device_id,
                 "token": token,
-            },
-            headers=self._control_headers(profile, device_id),
+            }
+        else:
+            payload.update({"usrId": usr_id, "deviceId": device_id, "token": token})
+        res = await self._post(
+            self._endpoint_url(endpoint),
+            payload,
+            headers=lambda: self._control_headers(profile, device_id),
             require_results=endpoint.require_results,
             allow_non_json_response=endpoint.allow_non_json_response,
         )
@@ -171,21 +190,98 @@ class PanasonicApiClient:
     ) -> dict[str, Any]:
         """Send status/control params for a supported device profile."""
         endpoint = profile.set_endpoint
-        return await self._post(
-            self._endpoint_url(endpoint),
-            {
-                "id": endpoint.request_id,
+        payload: dict[str, Any] = {"id": endpoint.request_id}
+        if endpoint.nested_params:
+            payload["params"] = {
                 "usrId": usr_id,
                 "deviceId": device_id,
                 "token": token,
-                "params": params,
-            },
-            headers=self._control_headers(profile, device_id),
+                **params,
+            }
+        else:
+            payload.update(
+                {
+                    "usrId": usr_id,
+                    "deviceId": device_id,
+                    "token": token,
+                    "params": params,
+                }
+            )
+        return await self._post(
+            self._endpoint_url(endpoint),
+            payload,
+            headers=lambda: self._control_headers(profile, device_id),
             require_results=endpoint.require_results,
             allow_non_json_response=endpoint.allow_non_json_response,
         )
 
     async def _post(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        *,
+        headers,
+        require_results: bool,
+        allow_non_json_response: bool = False,
+        retry: bool = True,
+    ) -> dict[str, Any]:
+        try:
+            return await self._post_once(
+                url,
+                payload,
+                headers=headers() if callable(headers) else headers,
+                require_results=require_results,
+                allow_non_json_response=allow_non_json_response,
+            )
+        except PanasonicApiAuthError:
+            # Panasonic China keeps a single short-lived session per account.
+            # When it expires (e.g. because the phone App logged in again) the
+            # stored SSID becomes invalid; transparently log in again.
+            if not retry or self._authenticating or not self._username or not self._password:
+                raise
+            _LOGGER.warning("Panasonic cloud session expired; logging in again")
+            await self._relogin()
+            return await self._post_once(
+                url,
+                payload,
+                headers=headers() if callable(headers) else headers,
+                require_results=require_results,
+                allow_non_json_response=allow_non_json_response,
+            )
+
+    async def _relogin(self) -> None:
+        """Re-authenticate with the stored credentials and persist the new SSID.
+
+        Several entities poll concurrently, so guard the login with a lock to
+        avoid a burst of logins that would invalidate each other.
+        """
+        if self._relogin_lock is None:
+            self._relogin_lock = asyncio.Lock()
+        async with self._relogin_lock:
+            if self._authenticating:
+                return
+            self._authenticating = True
+            try:
+                self.ssid = None
+                result = await self.authenticate(self._username, self._password)
+            finally:
+                self._authenticating = False
+
+        for entry in self._hass.config_entries.async_entries("panasonic_smart_china"):
+            if entry.data.get("username") == self._username:
+                self._hass.config_entries.async_update_entry(
+                    entry,
+                    data={
+                        **entry.data,
+                        "SSID": result.ssid,
+                        "usrId": result.usr_id,
+                        "familyId": result.family_id,
+                        "realFamilyId": result.real_family_id,
+                    },
+                )
+                break
+
+    async def _post_once(
         self,
         url: str,
         payload: dict[str, Any],
