@@ -22,6 +22,13 @@
         "data": {
           "password": "密码"
         }
+      },
+      "reconfigure": {
+        "title": "重新配置松下账号",
+        "description": "松下账号为单点登录：手机 App 重新登录后，Home Assistant 中保存的会话会失效。请输入账号 {username} 的密码以刷新会话。",
+        "data": {
+          "password": "密码"
+        }
       }
     },
     "error": {
@@ -32,7 +39,8 @@
       "already_configured": "该松下账号已配置",
       "no_devices_found": "未找到设备：请确保账号下已绑定设备",
       "no_supported_devices_found": "账号中未找到当前支持的设备。以下设备因类别或型号未支持而未添加：\n{unsupported_devices}",
-      "reauth_successful": "重新认证成功"
+      "reauth_successful": "重新认证成功",
+      "reconfigure_successful": "重新配置成功"
     }
   },
   "options": {
